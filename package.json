@@ -1,0 +1,12 @@
+{
+  "name": "video-speed-tool",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.4" },
+  "scripts": {
+    "check": "node --check agent-5x.mjs && node --check ykt-5x.js && node --check test/fixture.mjs && node --check test/tool.test.mjs && node --check test/browser-smoke.mjs",
+    "test": "node --test test/tool.test.mjs",
+    "test:browser": "node test/browser-smoke.mjs"
+  }
+}
