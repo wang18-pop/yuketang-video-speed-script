@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         播放器倍速工具
+// @name         雨课堂视频加速脚本
 // @version      3.0.0
 // @description  显式调整倍速、原生读回及可恢复的本地诊断
 // @match        https://www.yuketang.cn/ai-workspace/lms-graph/*/video/*
