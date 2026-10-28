@@ -2,15 +2,16 @@
 
 客户端播放器倍速工具：显式应用倍率、使用 HTMLMediaElement 原生 getter 读回、测量播放状态、恢复本工具保存的状态。包含用户脚本面板和 Node.js CDP 命令行入口，两者使用同一份 `ykt-5x.js`，无第三方运行依赖。
 
-私有仓库：[wang18-pop/yuketang-video-speed-script](https://github.com/wang18-pop/yuketang-video-speed-script)。需要使用有访问权限的 GitHub 账号登录查看。内部文件名仍为 `ykt-5x.js`、`agent-5x.mjs`，包名为 `yuketang-video-speed-script`。
+公开仓库：[wang18-pop/yuketang-video-speed-script](https://github.com/wang18-pop/yuketang-video-speed-script)。内部文件名仍为 `ykt-5x.js`、`agent-5x.mjs`，包名为 `yuketang-video-speed-script`。
 
 **不会启动播放、续播、修改心跳或完成度、生成观看记录。设置倍率成功、HTTP 成功或媒体结束，都不代表课程完成。**
 
 ## 环境与版本
 
 - Node.js >= 22.4，使用内置 fetch / WebSocket；本次实际测试 Node.js 24.22.1、Windows、Chrome 无头模式。
-- 已安装的 Chrome / Chromium，或能够在页面主世界运行且提供站点 jQuery 的用户脚本环境。
-- 页面适配仅限 `https://www.yuketang.cn/ai-workspace/lms-graph/<CLASSROOM_ID>/video/<VIDEO_ID>`。
+- 电脑网页：Chrome / Chromium 等浏览器；旧版播放器控制需要页面主世界与站点 jQuery。
+- 安卓 / iOS 网页：需要可以运行用户脚本的浏览器和扩展；移动版仅使用原生 HTML5 video API，不依赖电脑网页的 Vue / jQuery。
+- 已识别路径包括电脑版 `/ai-workspace/lms-graph/<CLASSROOM_ID>/video/<VIDEO_ID>` 和移动网页版 `/ai-workspace/lms-graph-mobile/<CLASSROOM_ID>/video/<VIDEO_ID>`（可附带查询参数）。路径匹配不代表播放器已成功适配。
 - 适配结构来自旧项目对 web 1.2.339 的记录；**未在真实平台复验该版本，也未验证当前版本长期兼容**。运行时要求 `.xtplayer.__vue__.$data.player.video` 与容器内 video 是同一对象，且 options、倍速菜单及 jQuery API 符合预期；无法确定身份时失败。
 - 本地模拟的 DOM / 菜单处理器不是平台源码，测试不证明真实平台行为。
 
@@ -40,8 +41,8 @@ npm run test:browser
 | 电脑浏览器，日常手动使用 | 浏览器 + Tampermonkey（油猴） | 网页右下角按钮 | 文件具备油猴元数据；管理器与真实平台组合尚未实测 |
 | 桌面终端 / 命令行 | Node.js >= 22.4 + 本机 Chrome CDP | `node agent-5x.mjs` | CLI、本机 mock CDP 与模拟播放器已测试 |
 | AI Agent | 能运行本地命令的 Agent + 上一行的环境 | 调用 CLI，检查 JSON 与退出码 | 不自动登录或接管普通浏览器 |
-| 安卓手机 / 平板 | 支持油猴的浏览器，例如 Firefox for Android | 网页按钮 | 安装路线有官方支持；本脚本未做安卓真机验证 |
-| iPhone / iPad | Safari + Tampermonkey 或 Userscripts 扩展 | 网页按钮 | 扩展有官方安装路线；本脚本未做 iOS 真机验证 |
+| 安卓手机 / 平板 | Firefox for Android + Tampermonkey | 移动网页按钮 | v3.1.0 增加独立 HTML5 video 适配；仍需安卓真机验证 |
+| iPhone / iPad | Safari + 可运行用户脚本的扩展 | 移动网页按钮 | v3.1.0 共用移动版 HTML5 控制；尚未 iOS 真机验证 |
 | 雨课堂独立桌面客户端、手机 App、微信内置页面 | 不属于当前支持范围 | 无 | 不能把浏览器脚本当作客户端插件安装 |
 
 **电脑端在这里指浏览器网页；桌面命令行是另外一种操作入口。本项目没有独立桌面应用、手机 App 或安装包。** 油猴使用不需要 Node.js；命令行和 Agent 使用不需要额外安装油猴。
@@ -64,7 +65,7 @@ npm run test:browser
 
 安装只会添加面板，**不会自动应用或自动播放**。刷新、切换视频或播放器重建后需要重新确认并点击倍率。不要同时启用旧版与新版脚本；已安装旧版时，在油猴中编辑原条目替换源码，或先禁用旧条目再添加。
 
-当前文件名不是 `.user.js`，且仓库是私有的，因此不要依赖点 Raw 后自动安装。使用上面的“复制源码 → 油猴新建脚本”流程。这个手动安装方式也不提供仓库自动更新；更新时需再次替换源码。
+当前文件名不是 `.user.js`，建议使用“复制源码 → 油猴新建脚本”的方式；手动安装不会自动同步 GitHub 更新，已有 v3.0.0 用户必须在原油猴条目内替换为 v3.1.0 源码并保存，**不要新建第二个同时启用的脚本**。
 
 ## 桌面终端：使用 Node.js 命令行
 
@@ -157,36 +158,22 @@ Agent 操作顺序为 `--list → 确认目标 → --state → --apply=5 → 核
 
 ## 安卓手机 / 平板
 
-推荐安装路线是 Firefox for Android + Tampermonkey；[Mozilla 的扩展页面明确标注 Android 支持](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/)。**这只证明管理器支持，不代表本脚本已在手机上验证成功。**
+**v3.1.0 新增移动网页版适配，尚未完成真实安卓播放器验证。** 在 Firefox for Android + Tampermonkey 中运行，不需要 Node.js，也不能注入雨课堂 App 或微信内置浏览器。
 
-1. 在 Firefox for Android 的扩展管理中安装 Tampermonkey，并启用所需的网站访问权限。
-2. 在该浏览器登录有仓库访问权限的 GitHub 账号，打开 `ykt-5x.js`，复制完整源码。
-3. 打开 Tampermonkey 控制面板 → 新建脚本 → 替换默认内容 → 保存并启用。不同版本的菜单位置可能不同。
-4. 在同一浏览器打开目标视频网页，尝试打开“桌面版网站 / 请求桌面网站”，然后完整刷新。只有 URL 与播放器结构都符合电脑网页版适配条件时才可能工作；桌面模式不保证平台一定提供相同结构。
-5. 在网页内等待播放器加载，出现面板后点击 `5×`，检查结果，再由你自己点击播放。看不到面板或提示未就绪时，不要判定已经应用成功。
-6. 要恢复时退出全屏，在网页中点击“恢复”。手机原生全屏可能不会显示网页面板；可先在普通网页视图操作，再进入全屏。
+1. 在 Firefox 的扩展管理安装并启用 [Tampermonkey](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/)。
+2. 如果已安装 v3.0.0：油猴 → 已安装脚本 → 编辑“雨课堂视频加速脚本”，删除旧源码；从 [ykt-5x.js](ykt-5x.js) 复制完整 v3.1.0 源码粘贴保存。**保留原脚本条目，不要同时启用两个版本。**
+3. 在同一个 Firefox 中登录雨课堂，进入视频详情页。手机版形如 `https://www.yuketang.cn/ai-workspace/lms-graph-mobile/<CLASSROOM_ID>/video/<VIDEO_ID>?...`；普通移动版即可，不要求强制切换桌面版网站。
+4. 直接刷新具体视频页。正确加载脚本时会出现“雨课堂倍速 · 手机网页版”，包含 `2× / 3× / 4× / 5× / 恢复 / 状态 / 测3秒`。
+5. 在视频已加载的前提下，点击 `5×`，检查 `ok:true` 和 `real:5`。**之后手动播放视频**，点击“测3秒”观察 `effectiveRate`；测量期间不要拖动或暂停。单次瞬时读回不证明视频持续以 5 倍速播放，部分浏览器或播放器可能随后将倍率重置。
+6. “状态”可检查当前速度，“恢复”会尝试恢复本次修改前的原始倍率；切换视频后不把旧视频备份写入新视频。刷新或退出全屏后可再次查看网页面板。
 
-不要在雨课堂 App、微信内置浏览器或未装脚本管理器的其他浏览器里寻找这个面板。本脚本没有手机后台保活功能，锁屏、切后台后不保证持续播放或倍率；安卓本地 Node.js / CDP 方案未适配。
+如果“没有唯一的 HTML5 video”，说明当前页面的视频尚未就绪、采用 iframe/非 video 播放器、或同时存在多个 video；不应报告 5 倍速成功。原生全屏可能隐藏网页面板。手机锁屏、后台切换或浏览器策略可能暂停或限速；**不保证后台保活及课程完成状态**。
 
 ## iPhone / iPad
 
-使用 Safari 的用户脚本扩展。Tampermonkey 官方提供 [iOS 安装入口](https://www.tampermonkey.net/index.php?browser=safari)；也可以使用 [Userscripts 官方项目](https://github.com/quoid/userscripts)，其说明列有 iOS / iPadOS 安装和脚本目录方式。**当前脚本未在 iPhone / iPad 上实测，以下是安装与尝试路线。**
+**同一份 v3.1.0 脚本通过 Safari 用户脚本扩展尝试运行。** 可从 [Tampermonkey 官方 Safari 入口](https://www.tampermonkey.net/index.php?browser=safari) 或 [Userscripts 项目](https://github.com/quoid/userscripts) 选择可用扩展，按其官方方式安装、授予 `www.yuketang.cn` 网站权限，并将完整 `ykt-5x.js` 代码粘贴导入。若扩展要求 `.user.js` 文件，可将保存到手机的**本地副本**命名为 `ykt-5x.user.js`，不要修改仓库文件名或内容。
 
-### 方式 A：Safari + Tampermonkey
-
-1. 从官方入口安装适合当前 iOS 的 Tampermonkey。
-2. 在系统设置或 Safari 扩展管理中启用它，允许访问目标站点；具体入口取决于系统版本。
-3. 如果当前版本提供新建脚本编辑器，按电脑端流程粘贴完整源码并保存；若使用文件导入，按该扩展的导入界面选择脚本文件。
-4. 在 Safari 打开具体视频网页，选择“请求桌面网站”后完整刷新。面板出现且应用结果确认成功后，再手动播放。
-
-### 方式 B：Safari + Userscripts
-
-1. 安装 Userscripts，打开其 App，确认脚本保存目录；在 Safari 扩展设置中启用扩展，并允许访问目标网站。
-2. 将仓库 `ykt-5x.js` 的**源码内容**保存为 `ykt-5x.user.js`，放到 Userscripts 指定的目录。这里只改手机本地副本名称，仓库内部文件名不变。确认没有保存成 `.js.txt`，内容不是 GitHub HTML 网页。
-3. 在 Safari 打开具体视频网页，通过扩展菜单确认脚本已被识别和启用。私有仓库不依赖公开安装链接；官方支持直接向脚本目录保存 `.user.js` 文件，见 [Userscripts 安装说明](https://github.com/quoid/userscripts#usage)。
-4. 请求桌面网站并刷新，退出原生全屏后查看网页面板。点击 `5×`、核对结果，再手动播放；撤销用“恢复”。
-
-iOS 的播放器、原生全屏及页面结构可能与电脑不同。如果始终没有面板、无法找到播放器或实际倍率不是 5，当前设备 / 页面组合就尚未验证可用；不要用修改 URL 匹配规则来假装兼容。此项目不提供 iOS App 内注入或手机 Agent 执行方案。
+在 Safari 内登录并打开移动版视频 URL，刷新后检查脚本面板，再手动测试倍率和“测3秒”。iOS Safari/WebKit 可能限制播放倍率、媒体后台播放或用户脚本运行位置；如果 `real` 不为所设值或 `effectiveRate` 与目标不符，判定当前环境不兼容，而非强行宣称通过。**iOS 目前没有真机验证结果。**
 
 ## 页面 API 与 CLI 参数参考
 
@@ -253,4 +240,4 @@ CLI 选项：
 
 发布使用 `.gitignore` 白名单：两个入口、测试、包清单、锁文件和项目文档。原目录历史课程记录、实验报告、覆盖率模型和原文件备份保留在本机，不纳入 Git。不得使用 `git add -f` 绕过排除规则。
 
-未发现原项目许可证，未替项目添加新开源许可证。仓库为私有；第三方来源边界见 [THIRD_PARTY.md](THIRD_PARTY.md)。审查结论和实际验证见 [AUDIT.md](AUDIT.md)。
+未发现原项目许可证，未替项目添加新开源许可证。仓库已公开；第三方来源边界见 [THIRD_PARTY.md](THIRD_PARTY.md)。审查结论和实际验证见 [AUDIT.md](AUDIT.md)。
