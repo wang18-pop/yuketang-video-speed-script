@@ -228,3 +228,48 @@ test('actual loopback discovery timeout aborts and malformed discovery fails', a
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+
+test('mobile webpage adapter loads with its own HTML5 video and preserves native speed on restore', () => {
+  assert.match(source, /@match\s+https:\/\/www\.yuketang\.cn\/ai-workspace\/lms-graph-mobile\/\*\/video\/\*/);
+  const f = fixture(source);
+  assert.equal(f.api.version, '3.1.0');
+  assert.equal(f.api.dispose().ok, true);
+  f.location.pathname = '/ai-workspace/lms-graph-mobile/33283570/video/89052753';
+  f.location.search = '?is_chapter=1&node_id=17241749';
+  f.document.querySelectorAll = selector => selector === 'video' ? [f.player.v] : [];
+  const installed = vm.runInContext(source, f.sandbox);
+  assert.equal(installed.ok, true);
+  assert.equal(installed.mode, 'mobile-html5');
+  assert.equal(f.api.state().mode, 'mobile-html5');
+  const video = f.player.v;
+  const baseline = video.playbackRate;
+  assert.equal(f.api.apply(5).real, 5);
+  assert.equal(video.playbackRate, 5);
+  assert.equal(f.api.apply(3).real, 3);
+  assert.equal(f.api.restore().restored, true);
+  assert.equal(video.playbackRate, baseline);
+  assert.equal(f.api.dispose().ok, true);
+});
+test('mobile adapter fails closed on ambiguous players, changed source, and seek during measurement', async () => {
+  const f = fixture(source);
+  f.api.dispose();
+  f.location.pathname = '/ai-workspace/lms-graph-mobile/33283570/video/89052753';
+  f.document.querySelectorAll = selector => selector === 'video' ? [f.player.v] : [];
+  vm.runInContext(source, f.sandbox);
+  const video = f.player.v;
+  f.document.querySelectorAll = selector => selector === 'video' ? [video, video] : [];
+  assert.equal(f.api.apply(5).ok, false);
+  f.document.querySelectorAll = selector => selector === 'video' ? [video] : [];
+  assert.equal(f.api.apply(5).ok, true);
+  const pending = f.api.measure(300);
+  video.currentTime += 5; // Triggers seeking: must not fabricate a valid effective playback rate.
+  const data = await pending;
+  assert.equal(data.reason, 'seek');
+  assert.equal(data.effectiveRate, null);
+  video.currentSrc = 'fixture:next';
+  assert.equal(f.api.state().stale, true);
+  assert.equal(f.api.restore().skippedReusedInstance, true);
+  assert.equal(video.playbackRate, 5);
+  f.api.dispose();
+});
