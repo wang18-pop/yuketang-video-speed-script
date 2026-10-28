@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-export const VERSION = '3.0.0';
+export const VERSION = '3.1.0';
 const range = (x, low, high) => Number.isFinite(x) && x >= low && x <= high;
 export function validPage(value) {
   try {
