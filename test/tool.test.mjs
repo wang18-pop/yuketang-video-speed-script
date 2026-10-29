@@ -14,6 +14,216 @@ const target = { id: 'fixture', type: 'page', url: 'https://www.yuketang.cn/ai-w
   webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/fixture' };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function generic() {
+  const f = fixture(source);
+  f.location.href = 'https://example.com/watch';
+  return f;
+}
+
+test('generic videos preserve the original rate and pause; explicit selection rejects ambiguous and invalid targets', () => {
+  const f = generic(), first = f.player.v, second = f.document.createElement('video');
+  const query = f.document.querySelectorAll;
+  f.document.querySelectorAll = sel => sel === 'video' ? [first, second] : query(sel);
+  assert.equal(f.api.apply(5).ok, false);
+  for (const target of [null, -1, 2, 1.5, '0', {}, Infinity]) assert.equal(f.api.apply(5, target).ok, false);
+  assert.equal(first.playbackRate, 1.25);
+  first.pause();
+  assert.equal(f.api.videos().videos.length, 2);
+  assert.equal(f.api.apply(5, 0).mode, 'html5');
+  assert.equal(first.playbackRate, 5);
+  assert.equal(second.playbackRate, undefined);
+  assert.equal(f.api.apply(4, first).real, 4);
+  assert.equal(f.api.restore().real, 1.25);
+  assert.equal(first.paused, true);
+  assert.equal(f.window.video5x, f.api);
+  f.api.dispose();
+  assert.equal(f.window.video5x, undefined);
+});
+
+test('generic discovery walks open shadow trees and same-origin frames, and reports inaccessible frames', () => {
+  const f = generic(), v = f.player.v;
+  const shadow = f.document.createElement('div');
+  shadow.shadowRoot = { querySelectorAll: sel => sel === 'video' ? [v] : [] };
+  const frame = f.document.createElement('iframe');
+  frame.contentDocument = { querySelectorAll: sel => sel === 'video' ? [v] : [] };
+  const blocked = f.document.createElement('iframe');
+  Object.defineProperty(blocked, 'contentDocument', { get() { throw Error('SecurityError'); } });
+  f.document.querySelectorAll = sel => sel === '*' ? [shadow, frame, blocked] : [];
+  assert.equal(f.api.videos().videos.length, 1);
+  assert.equal(f.api.videos().blockedFrames, 1);
+  assert.equal(f.api.apply().real, 5);
+  f.api.dispose();
+});
+
+test('generic empty/unready media and native rejection fail without losing restoration state', () => {
+  const f = generic(), v = f.player.v;
+  const query = f.document.querySelectorAll;
+  f.document.querySelectorAll = () => [];
+  assert.equal(f.api.apply().ok, false);
+  assert.equal(f.api.videos().videos.length, 0);
+  f.document.querySelectorAll = query;
+  v.readyState = 0; assert.equal(f.api.apply().ok, false);
+  v.readyState = 4; v.duration = Infinity;
+  assert.equal(f.api.apply().ok, true); // No finite-duration gate on standard HTML5 media.
+  assert.equal(f.api.restore().ok, true);
+  const proto = Object.getPrototypeOf(v);
+  const native = Object.getOwnPropertyDescriptor(proto, 'playbackRate');
+  Object.defineProperty(proto, 'playbackRate', { ...native, set(x) { if (x === 5) throw Error('rejected'); native.set.call(this, x); } });
+  // Reinstall to capture the rejecting native descriptor.
+  f.api.dispose(); vm.runInContext(source, f.sandbox);
+  const rejected = f.api.apply();
+  assert.equal(rejected.ok, false); assert.equal(rejected.rollback.ok, true); assert.equal(v.playbackRate, 1.25);
+  f.api.dispose(); Object.defineProperty(proto, 'playbackRate', native);
+});
+
+test('keeper corrects site resets, stops on source/route replacement and stays stopped after restore/dispose', async () => {
+  for (const mode of ['html5', 'yuketang']) {
+    const f = mode === 'html5' ? generic() : fixture(source), v = f.player.v;
+    try {
+      assert.equal(f.api.apply().keeping, true);
+      v.playbackRate = 1;
+      if (mode === 'yuketang') f.player.p.options.speed.value = 1;
+      await wait(650);
+      assert.equal(v.playbackRate, 5);
+      if (mode === 'yuketang') assert.equal(f.player.selected, 5);
+      assert.equal(f.api.restore().ok, true);
+      v.playbackRate = 2; await wait(550); assert.equal(v.playbackRate, 2);
+      assert.equal(f.api.apply().ok, true);
+      v.currentSrc = 'fixture:replacement'; v.playbackRate = 1.5;
+      await wait(550);
+      assert.equal(v.playbackRate, 1.5); assert.equal(f.api.state().keeping, false);
+      assert.equal(f.api.state().stale, true); assert.equal(f.api.state().ok, false);
+      assert.equal(f.api.restore().skippedReusedInstance, true);
+      assert.equal(f.api.apply().ok, true);
+      f.location.search = '?next'; v.playbackRate = 3;
+      await wait(550); assert.equal(v.playbackRate, 3); assert.equal(f.api.state().keeping, false);
+    } finally { f.api.dispose(); }
+  }
+});
+
+test('generic restore failure is retryable; selected video changes restore only the old baseline', () => {
+  const f = generic(), old = f.player.v;
+  let reject = false;
+  const proto = Object.getPrototypeOf(old), native = Object.getOwnPropertyDescriptor(proto, 'playbackRate');
+  f.api.dispose();
+  Object.defineProperty(proto, 'playbackRate', { ...native, set(x) { if (reject && x === 1.25) throw Error('restore rejected'); native.set.call(this, x); } });
+  vm.runInContext(source, f.sandbox);
+  assert.equal(f.api.apply().ok, true);
+  reject = true;
+  assert.equal(f.api.restore().retryable, true);
+  assert.equal(f.api.state().keeping, false);
+  reject = false; assert.equal(f.api.restore().ok, true);
+  assert.equal(f.api.apply().ok, true);
+  const next = f.replace().v; next.playbackRate = 2;
+  assert.equal(f.api.apply().real, 5);
+  assert.equal(old.playbackRate, 1.25);
+  assert.equal(f.api.restore().real, 2);
+  f.api.dispose(); Object.defineProperty(proto, 'playbackRate', native);
+});
+
+test('a late Yuketang adapter restores the generic baseline before taking its own backup', () => {
+  const f = fixture(source), p = f.player;
+  p.p.video = null;
+  assert.equal(f.api.apply().mode, 'html5');
+  p.p.video = p.v;
+  assert.equal(f.api.state().stale, true);
+  assert.equal(f.api.state().ok, false);
+  assert.equal(f.api.apply().mode, 'yuketang');
+  assert.equal(f.api.restore().ok, true);
+  assert.equal(p.v.playbackRate, 1.25); assert.equal(p.p.options.speed.value, 1.25);
+  assert.equal(p.p.options.isDrag, false);
+  assert.equal(f.api.dispose().ok, true); assert.equal(p.v.playbackRate, 1.25);
+});
+
+test('media errors or temporarily missing metadata do not erase the original backup', () => {
+  for (const state of ['error', 'unready']) {
+    const f = generic(), v = f.player.v;
+    assert.equal(f.api.apply().ok, true);
+    if (state === 'error') v.error = { code: 3 }; else v.readyState = 0;
+    assert.equal(f.api.restore().restored, true);
+    assert.equal(v.playbackRate, 1.25);
+    f.api.dispose();
+  }
+});
+
+test('a rejected keeper correction stops and rolls back instead of leaving an endless writer', async () => {
+  const f = generic(), v = f.player.v, proto = Object.getPrototypeOf(v);
+  const native = Object.getOwnPropertyDescriptor(proto, 'playbackRate');
+  let reject = false;
+  f.api.dispose();
+  Object.defineProperty(proto, 'playbackRate', { ...native, set(x) { if (reject && x === 5) throw Error('site rejects speed'); native.set.call(this, x); } });
+  vm.runInContext(source, f.sandbox);
+  try {
+    assert.equal(f.api.apply().ok, true);
+    reject = true; v.playbackRate = 2;
+    await wait(650);
+    assert.equal(v.playbackRate, 1.25);
+    assert.equal(f.api.state().ok, false); assert.equal(f.api.state().keeping, false);
+    assert.match(f.api.state().error, /rejected/);
+    assert.equal(f.api.restore().ok, true);
+  } finally { reject = false; f.api.dispose(); Object.defineProperty(proto, 'playbackRate', native); }
+});
+
+test('generic CLI enumerates videos before explicit multi-video selection and closes its connection', async () => {
+  const f = generic(), first = f.player.v;
+  const query = f.document.querySelectorAll;
+  f.document.querySelectorAll = sel => sel === 'video' ? [first, first] : query(sel);
+  let closed = 0;
+  const deps = { fetch: async () => ({ ok: true, json: async () => [{ ...target, url: f.location.href }] }),
+    connect: async () => ({ close() { closed++; }, send: async (method, p) => method !== 'Runtime.evaluate' ? {}
+      : { result: { value: await vm.runInContext(p.expression, f.sandbox) } } }) };
+  assert.equal((await run(parseArgs(['--videos']), deps)).result.videos.length, 1);
+  const result = await run(parseArgs(['--apply', '--video=0']), deps);
+  assert.equal(result.ok, true); assert.equal(result.result.real, 5);
+  first.currentSrc = 'fixture:next'; first.playbackRate = 2;
+  assert.equal((await run(parseArgs(['--apply']), deps)).ok, true);
+  assert.equal((await run(parseArgs(['--restore']), deps)).ok, true);
+  assert.equal(first.playbackRate, 2);
+  assert.equal(closed, 4);
+  for (const args of [['--apply', '--video=-1'], ['--apply', '--video=1.5'], ['--apply', '--video=NaN'], ['--apply', '--video= '], ['--apply', '--video='], ['--state', '--video=0']])
+    assert.throws(() => parseArgs(args));
+  f.api.dispose();
+});
+
+test('a setter that silently ignores isDrag cannot report successful apply', () => {
+  const f = fixture(source);
+  Object.defineProperty(f.player.p.options, 'isDrag', { get: () => false, set() {} });
+  const result = f.api.apply(5);
+  assert.equal(result.ok, false);
+  assert.equal(result.rollback.ok, true);
+  assert.equal(f.player.v.playbackRate, 1.25);
+  assert.equal(f.player.p.options.speed.value, 1.25);
+  f.api.dispose();
+});
+
+test('Vue accessors retain identity and restore closure-held values', () => {
+  const f = fixture(source), p = f.player;
+  const before = [];
+  for (const [obj, key] of [[p.p.options, 'isDrag'], [p.p.options.speed, 'value']]) {
+    let value = obj[key];
+    Object.defineProperty(obj, key, { configurable: false, enumerable: true,
+      get() { return value; }, set(next) { value = next; } });
+    before.push([obj, key, Object.getOwnPropertyDescriptor(obj, key)]);
+  }
+  assert.equal(f.api.apply(5).real, 5);
+  assert.equal(f.api.apply(4).sp, 4);
+  assert.equal(f.api.restore().ok, true);
+  assert.equal(p.p.options.isDrag, false);
+  assert.equal(p.p.options.speed.value, 1.25);
+  for (const [obj, key, d] of before) assert.deepEqual(Object.getOwnPropertyDescriptor(obj, key), d);
+  f.api.dispose();
+});
+
+test('getter-only configuration is rejected without modifying media or menus', () => {
+  const f = fixture(source), p = f.player;
+  const menu = p.menu.children.map(el => el.innerHTML);
+  Object.defineProperty(p.p.options, 'isDrag', { get: () => false });
+  assert.equal(f.api.apply(5).ok, false);
+  assert.equal(p.v.playbackRate, 1.25);
+  assert.deepEqual(p.menu.children.map(el => el.innerHTML), menu);
+  f.api.dispose();
+});
+
 test('strict arguments reject NaN, Infinity, empty, out of range, conflicting and unknown inputs', () => {
   for (const args of [['--apply=NaN'], ['--apply=Infinity'], ['--apply='], ['--apply=0'], ['--apply=17'],
     ['--measure=1'], ['--timeout=-1'], ['--timeout=1.1'], ['--timeout=Infinity'], ['--apply', '--measure=301'],
@@ -23,10 +233,12 @@ test('strict arguments reject NaN, Infinity, empty, out of range, conflicting an
   for (const value of ['http://example.com', 'http://127.0.0.1.example.com', 'http://user@localhost', 'http://localhost/path'])
     assert.throws(() => localEndpoint(value));
 });
-test('target matching fails closed; checks domain, path, type, ambiguity and websocket', () => {
+test('generic HTTP(S) targets still reject credentials, internal pages, ambiguity and remote websockets', () => {
   assert.equal(selectTarget([target], {}).id, 'fixture');
-  for (const targets of [[], [{ ...target, type: 'iframe' }], [{ ...target, url: 'https://example.com/?yuketang.cn' }],
-    [{ ...target, url: 'https://www.yuketang.cn/' }], [target, { ...target, id: 'second' }],
+  assert.equal(selectTarget([{ ...target, url: 'http://localhost:1234/video' }], {}).id, 'fixture');
+  assert.equal(selectTarget([{ ...target, url: 'https://example.com/video' }], {}).id, 'fixture');
+  for (const targets of [[], [{ ...target, type: 'iframe' }], [{ ...target, url: 'chrome://settings/' }], [{ ...target, url: 'file:///private.html' }],
+    [{ ...target, url: 'https://user:pass@example.com/' }], [target, { ...target, id: 'second' }],
     [{ ...target, webSocketDebuggerUrl: 'ws://example.com/socket' }]]) assert.throws(() => selectTarget(targets, {}));
   assert.throws(() => selectTarget([target], { match: 'absent' }));
   assert.throws(() => selectTarget([target], { url: `${target.url}?other=1` }));
@@ -63,7 +275,8 @@ test('invalid input and unsupported players do not mutate; failed apply is not r
   assert.equal(f.api.apply(5).ok, false);
   f.player.broken = false; assert.equal(f.api.restore().ok, true);
   f.player.p.video = null;
-  assert.equal(f.api.apply().ok, false);
+  assert.equal(f.api.apply().mode, 'html5'); // A standard video remains usable without the platform's private player.
+  f.api.dispose();
 });
 test('replacement restores the old instance and preserves the new baseline, including source reuse', () => {
   const f = fixture(source), old = f.player;
@@ -230,46 +443,3 @@ test('actual loopback discovery timeout aborts and malformed discovery fails', a
 });
 
 
-test('mobile webpage adapter loads with its own HTML5 video and preserves native speed on restore', () => {
-  assert.match(source, /@match\s+https:\/\/www\.yuketang\.cn\/ai-workspace\/lms-graph-mobile\/\*\/video\/\*/);
-  const f = fixture(source);
-  assert.equal(f.api.version, '3.1.0');
-  assert.equal(f.api.dispose().ok, true);
-  f.location.pathname = '/ai-workspace/lms-graph-mobile/33283570/video/89052753';
-  f.location.search = '?is_chapter=1&node_id=17241749';
-  f.document.querySelectorAll = selector => selector === 'video' ? [f.player.v] : [];
-  const installed = vm.runInContext(source, f.sandbox);
-  assert.equal(installed.ok, true);
-  assert.equal(installed.mode, 'mobile-html5');
-  assert.equal(f.api.state().mode, 'mobile-html5');
-  const video = f.player.v;
-  const baseline = video.playbackRate;
-  assert.equal(f.api.apply(5).real, 5);
-  assert.equal(video.playbackRate, 5);
-  assert.equal(f.api.apply(3).real, 3);
-  assert.equal(f.api.restore().restored, true);
-  assert.equal(video.playbackRate, baseline);
-  assert.equal(f.api.dispose().ok, true);
-});
-test('mobile adapter fails closed on ambiguous players, changed source, and seek during measurement', async () => {
-  const f = fixture(source);
-  f.api.dispose();
-  f.location.pathname = '/ai-workspace/lms-graph-mobile/33283570/video/89052753';
-  f.document.querySelectorAll = selector => selector === 'video' ? [f.player.v] : [];
-  vm.runInContext(source, f.sandbox);
-  const video = f.player.v;
-  f.document.querySelectorAll = selector => selector === 'video' ? [video, video] : [];
-  assert.equal(f.api.apply(5).ok, false);
-  f.document.querySelectorAll = selector => selector === 'video' ? [video] : [];
-  assert.equal(f.api.apply(5).ok, true);
-  const pending = f.api.measure(300);
-  video.currentTime += 5; // Triggers seeking: must not fabricate a valid effective playback rate.
-  const data = await pending;
-  assert.equal(data.reason, 'seek');
-  assert.equal(data.effectiveRate, null);
-  video.currentSrc = 'fixture:next';
-  assert.equal(f.api.state().stale, true);
-  assert.equal(f.api.restore().skippedReusedInstance, true);
-  assert.equal(video.playbackRate, 5);
-  f.api.dispose();
-});

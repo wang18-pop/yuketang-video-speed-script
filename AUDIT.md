@@ -1,59 +1,41 @@
-# 审查与验证
+# Agent 接口与审查记录
 
-日期：2026-10-28。范围：本地静态分析、模拟播放器、独立无头浏览器、本机 mock CDP；未连接真实课程账号、播放课程或改变学习记录。
+版本：4.0.0。日期：2026-10-29。只面向电脑网页，不新增运行依赖。
 
-## 问题、影响与修复
+## Agent 执行顺序
 
-| 问题 | 影响 | 修复及验证 |
-| --- | --- | --- |
-| evaluate 的入参是 JSON.stringify 后的源码字符串 | 控制器未安装却可能输出成功 | 执行源码本体；检查结构化安装结果、版本及 API；字符串返回和异常必须失败 |
-| 无匹配时回退首个标签页，子串匹配无域名约束 | 操作无关页面 | 域名、路径、page 类型、唯一目标和 loopback WebSocket 联合校验；不自动导航或启动 CDP |
-| 两入口维护两份控制器 | 修复漂移 | CLI 直接读取并执行同一份用户脚本 |
-| 重复 apply 覆盖备份、旧 video/player/menu 引用 | 状态损坏或跨实例恢复 | 动态身份检查、首次备份、重复操作幂等；新实例显式应用；复用源/路由/对象时跳过旧快照 |
-| DOM data-speed 与 jQuery 缓存不一致 | UI 显示成功但实际速率不同 | 备份并同步缓存，原生 getter 与配置共同验证；失败进行回滚并报告结果 |
-| restore 硬编码 1 倍，仅修改表面配置 | 原始倍率、闭包选中值和配置丢失 | 经原菜单处理器恢复内部选中值，恢复原倍率、描述符、菜单、缓存和标签；失败保留可重试备份 |
-| trace/untrace 无条件覆盖、删除 video 属性 | 删除其他代码的 getter/setter 或方法 | 移除写入栈包装；测量仅使用事件，保留其他代码的属性 |
-| waiting 未结算、seek 计入播放增量 | 虚报实际倍率 | 结算尾部 waiting；区分 pause/seek/end/replacement/navigation；有 seek 或中断时不输出倍率结论 |
-| WebSocket 关闭不拒绝 pending、连接和发现无期限、异常漏 close | 挂起或泄漏 | 连接/请求/HTTP 超时、关闭及导航统一拒绝 pending，finally 关闭；页面测量 finally 清理监听和定时器 |
-| 数值兜底隐藏非法输入、顶层 ok 忽略 apply | 错误成功报告 | 拒绝非法/无限/越界值，严格单一 action；顶层 ok 随操作结果、失败退出 1 |
-| 自动重应用和后台定时器跨生命周期运行 | 无法可靠停止或恢复 | 安装只显示面板，显式 apply；无自动播放、续播或强制改速循环 |
+1. 读取 `ykt-5x.js`，在用户指定视频所在的页面上下文执行源码本体。不要把源码 JSON 字符串当作脚本执行。安装本身不会应用倍速。
+2. 调用 `window.video5x.videos()` 列出视频，再调用 `window.video5x.apply(5, index)`。多个视频时必须明确选择；第二参数也可直接传当前视频元素。无第二参数时沿用已选视频，或选择唯一视频。
+3. 读取 `window.video5x.state()`，核对 `ok`、`real`、`target`、`keeping`。不要仅凭网站倍速标签宣布成功。雨课堂适配另检查内部选中值 `sp` 和 `isDrag`。
+4. 用户正在播放时可调用 `await window.video5x.measure(3000)` 验证实际媒体推进速度。发生跳转、中断或拖动时不要使用无效倍率；`cancelMeasure()` 可取消。
+5. `restore()` 停止保速并恢复原倍速；`dispose()` 进一步删除面板与全局 API。恢复失败返回 `retryable` 并保留备份，修复原因后重试。旧名称 `window.ykt5x` 保留为同一个 API 的别名，文件名保留以兼容原仓库链接。
+
+仅显式 apply 后每 500 ms 检查一次已选视频的倍率，网站重置时重新设置。视频、来源、路由或播放器发生变化时停止保速，Agent 应重新检查和明确应用；不会自动选择下一个视频。保速失败会停止并报告错误。脚本不自动播放、不跳转时间、不修改学习记录。
+
+## CLI
+
+CLI 读取同一份控制器，使用 Node.js >=22.4 的内置模块。浏览器须已由用户或其 Agent 配置本机 CDP。脚本不启动浏览器或登录。先用 `node agent-5x.mjs --list` 查找页面，再用 `--target=<id>` 锁定用户指定标签页。
+
+- `node agent-5x.mjs --videos --target=<id>`：列出视频索引。
+- `node agent-5x.mjs --apply=5 --target=<id> --video=0`：应用并保速。
+- `node agent-5x.mjs --state --target=<id>`：读回状态。
+- `node agent-5x.mjs --restore --target=<id>`：恢复。
+
+目标必须为 HTTP(S) 的唯一 page，CDP 及 WebSocket 必须位于 loopback。禁止回退到不明确的首个标签页。非法参数、失败操作、超时或断连以非零退出码结束。
+
+## 支持边界
+
+标准 HTML5 视频使用原生 playbackRate；雨课堂可识别的 xtplayer 保留已有菜单与 Vue 响应式配置适配。可发现同源 iframe 及开放 Shadow DOM 中的视频，并对所选视频保速。多个视频不会一并加速；尚无视频或媒体未就绪会返回失败。
+
+跨域或 sandbox 隔离的 iframe 会计入 blockedFrames，需要 Agent 在目标 frame 内另行执行。封闭 Shadow DOM、非标准或拒绝倍速的播放器需要按网站适配；直播即使属性接受 5 也不保证实际加速。浏览器可能限制可用倍率或五倍速声音。本轮只验证本机 Chrome，没有逐网站或其他浏览器验收。
 
 ## 实际验证
 
-环境：Windows、Node.js 24.22.1、Git 2.55.0.windows.5、Chrome 156.0.8078.48。
+实际执行结果：`npm run check` exit 0；`npm test` 31 passed、0 failed；`npm run test:browser` exit 0、browserSmoke=PASS。测试覆盖非法输入、空/未就绪视频、多视频选择、原倍速恢复、媒体错误、站点重设、保速失败、来源/路由替换、取消与并发测量、回滚失败重试、过期绑定重新应用、CDP 超时/断连及非零退出。
 
-执行命令及关键输出：
+独立审查复现并修复：HTML5 转雨课堂时两份备份冲突；媒体 error/未就绪时错误丢弃备份；CLI 以旧绑定状态阻止重新 apply。三项均补充回归，独立复核已关闭。
 
-```text
-npm run check
-# 两个入口及全部测试脚本 node --check，exit 0
+真实 Chrome 使用独立临时配置和仅本机 HTTP 夹具。通用测试由原生 video 元素解码本地生成的 WAV 媒体：最终运行 1.2009 秒推进 5.928405 秒，overallRate=4.936635（此前一次为 5.000087）；无 seek、暂停或缓冲。另验证多视频、同源 iframe、开放 Shadow DOM、隔离 frame 报告、网站重设后的保速、恢复到 1.25 倍及保持暂停。雨课堂菜单与 Vue getter/setter 使用本地模拟夹具，最终 native=1.25、selected=1.25、isDrag=false、menuRestored=true。
 
-npm test
-# tests 19; pass 19; fail 0; cancelled 0; skipped 0
+此证据证明本地核心及真实 Chromium 媒体链路通过，不是本轮真实雨课堂或全部网站的兼容证明。
 
-npm run test:browser
-# {"browserSmoke":"PASS","ok":true,"native":1.25,"selected":1.25,"paused":true,"menuRestored":true}
-
-npm install --package-lock-only --ignore-scripts --offline
-# audited 1 package; found 0 vulnerabilities（无第三方依赖，不代表完整安全保证）
-```
-
-覆盖：目标不匹配/歧义/伪装域名、安装字符串与异常、非法参数、重复 apply、预热缓存、失败回滚、首次及重复恢复、菜单/实例/媒体源/SPA 替换、外部属性保留、手动暂停、正常模拟倍率、尾部 waiting、seek、取消/导航/结束/实例替换、并发测量拒绝、监听清理、连接超时/关闭/异常/发送失败/导航、真实本机 WebSocket 断连及 HTTP 发现超时、CLI 非零退出。
-
-最初的测试也确实暴露并修正了测试夹具问题：中文路径的 URL 解码、属性描述符的默认 enumerable、无头 HTML 中 return 后换行，以及 WebSocket 异常断连的事件顺序。测试未通过时没有视作验收成功。
-
-## 发布与数据检查
-
-- 原目录没有 Git 仓库和已有远程历史；无可重写的旧历史。原文件先备份到本地排除目录，再写入已验证版本；其他既有文件保持原位。
-- 历史材料包含账号/课程标识及个人实验日志，全部排除。模式扫描未检出常见 GitHub token、Bearer 凭据或私钥格式；这不是对所有秘密形式的穷尽证明。
-- 只提交 `.gitignore`、两个入口、package.json / lock、README / AUDIT / THIRD_PARTY 和三个测试文件。发布前再次检查暂存内容、空白错误、个人路径、敏感模式及文件清单；不使用 git add -f。
-- 未发现 LICENSE，也未新增开源许可证；来源不确定性见 THIRD_PARTY.md。旧报告中的平台源码摘录和覆盖率模型不发布。
-
-## 剩余限制
-
-- 本地模拟及原生 getter 测试不证明真实平台当前或长期兼容；适配版本来自旧记录，私有接口可能变化。
-- 未测试真实平台播放器重建、闭包实现、完成度、心跳、课程长时间播放、后台节流、丢帧或用户脚本管理器隔离世界。
-- 菜单处理器或配置被冻结/失效时，恢复可能失败，返回明确错误并保留重试快照。媒体源/实例被复用后主动放弃旧快照，不跨视频写入。
-- CDP 断开后客户端无法保证再向页面发取消指令；采样最长 300 秒自行清理，不安装属性包装。
-- 不带自动重应用、旧 cfg 持久化及 trace/untrace 写入栈 API；这些旧功能的移除是为消除状态覆盖及清理风险。安装和刷新均需明确应用。
-- isDrag 修改可能同时放宽播放器拖动限制。测量说明见 README；任何成功结果均不等同学习记录完成。

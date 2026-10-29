@@ -2,7 +2,7 @@ import vm from 'node:vm';
 
 class Element extends EventTarget {
   constructor(tag) {
-    super(); this.tag = tag; this.children = []; this.attrs = new Map(); this.isConnected = true;
+    super(); this.tag = tag; this.tagName = tag.toUpperCase(); this.children = []; this.attrs = new Map(); this.isConnected = true;
     this.style = {}; this.content = '';
     this.classList = {
       contains: name => (this.getAttribute('class') || '').split(' ').includes(name),
@@ -21,7 +21,7 @@ class Element extends EventTarget {
   remove() { this.isConnected = false; }
   querySelectorAll(selector) {
     const tag = selector.startsWith('li') ? 'li' : selector;
-    return this.children.flatMap(el => [...(el.tag === tag ? [el] : []), ...el.querySelectorAll(selector)]);
+    return this.children.flatMap(el => [...(tag === '*' || el.tag === tag ? [el] : []), ...el.querySelectorAll(selector)]);
   }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }
@@ -94,11 +94,11 @@ export function fixture(source) {
   const window = new EventTarget(); window.jQuery = jq;
   const document = {
     body: new Element('body'), createElement: tag => new Element(tag),
-    querySelectorAll: sel => sel === '.xtplayer' ? (host ? [host] : []) : [],
+    querySelectorAll: sel => sel === '.xtplayer' ? (host ? [host] : []) : host ? host.querySelectorAll(sel) : [],
   };
   const location = new URL('https://www.yuketang.cn/ai-workspace/lms-graph/CLASSROOM_ID/video/VIDEO_ID');
   const sandbox = vm.createContext({ window, document, location, HTMLMediaElement: Video, MouseEvent: Event,
-    performance, setTimeout, clearTimeout, setInterval, clearInterval, console });
+    performance, setTimeout, clearTimeout, setInterval: (...args) => { const timer = setInterval(...args); timer.unref(); return timer; }, clearInterval, console });
   const installed = vm.runInContext(source, sandbox);
   return { window, document, location, sandbox, installed, jq, get api() { return window.ykt5x; },
     get player() { return player; }, hide() { host = null; },

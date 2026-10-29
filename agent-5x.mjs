@@ -2,13 +2,12 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-export const VERSION = '3.1.0';
+export const VERSION = '4.0.0';
 const range = (x, low, high) => Number.isFinite(x) && x >= low && x <= high;
 export function validPage(value) {
   try {
     const u = new URL(value);
-    return u.protocol === 'https:' && u.hostname === 'www.yuketang.cn' && !u.username && !u.password && !u.port
-      && /^\/ai-workspace\/lms-graph\/[^/]+\/video\/[^/]+\/?$/.test(u.pathname);
+    return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password;
   } catch { return false; }
 }
 export function localEndpoint(value, websocket = false) {
@@ -25,18 +24,20 @@ export function parseArgs(args) {
     const m = /^--([a-z]+)(?:=(.*))?$/.exec(arg);
     if (!m) throw new Error('Invalid argument');
     const [, key, value] = m;
-    if (['state', 'restore', 'list', 'help', 'apply'].includes(key)) {
+    if (['state', 'restore', 'list', 'videos', 'help', 'apply'].includes(key)) {
       if (++actions > 1 || (key !== 'apply' && value !== undefined)) throw new Error('Choose one action');
       o.action = key;
       if (key === 'apply') o.factor = value === undefined ? 5 : Number(value);
-    } else if (['cdp', 'timeout', 'measure', 'match', 'target', 'url'].includes(key) && value) {
-      o[key] = ['timeout', 'measure'].includes(key) ? Number(value) : value;
+    } else if (['cdp', 'timeout', 'measure', 'match', 'target', 'url', 'video'].includes(key) && value) {
+      if (key === 'video' && !/^\d+$/.test(value)) throw new Error('Video: nonnegative integer, with apply');
+      o[key] = ['timeout', 'measure', 'video'].includes(key) ? Number(value) : value;
     } else if (key !== 'json' || value !== undefined) throw new Error('Unknown or empty option');
   }
   localEndpoint(o.cdp);
   if (!range(o.timeout, 100, 60000) || !Number.isInteger(o.timeout)) throw new Error('Timeout: 100–60000 ms');
   if (o.action === 'apply' && !range(o.factor, .25, 16)) throw new Error('Factor: 0.25–16');
   if (o.measure !== undefined && (!range(o.measure, .01, 300) || o.action !== 'apply')) throw new Error('Measure: 0.01–300 seconds, with apply');
+  if (o.video !== undefined && (!Number.isSafeInteger(o.video) || o.video < 0 || o.action !== 'apply')) throw new Error('Video: nonnegative integer, with apply');
   if (o.url && !validPage(o.url)) throw new Error('Unsupported target URL');
   return o;
 }
@@ -104,7 +105,7 @@ export async function evaluate(cdp, expression, ms) {
 }
 export async function install(cdp, source) {
   const result = await evaluate(cdp, source); // Execute source itself, never JSON.stringify(source).
-  const api = await evaluate(cdp, `({version:window.ykt5x?.version,ready:['apply','restore','state','measure','cancelMeasure'].every(k=>typeof window.ykt5x?.[k]==='function')})`);
+  const api = await evaluate(cdp, `({version:window.video5x?.version,ready:['apply','restore','state','measure','cancelMeasure','videos'].every(k=>typeof window.video5x?.[k]==='function')})`);
   if (result?.ok !== true || result.version !== VERSION || api?.version !== VERSION || !api.ready)
     throw new Error('Controller installation failed');
 }
@@ -114,35 +115,41 @@ export async function run(o, dependencies = {}) {
   if (!response.ok) throw new Error('CDP target discovery failed');
   const targets = await response.json();
   if (!Array.isArray(targets)) throw new Error('Invalid target list');
-  if (o.action === 'list') return { ok: true, targets: targets.filter(t => t.type === 'page' && validPage(t.url)).map(t => ({ id: t.id })) };
+  if (o.action === 'list') return { ok: true, targets: targets.filter(t => t.type === 'page' && validPage(t.url)).map(t => ({ id: t.id, url: t.url, title: t.title || '' })) };
   const target = selectTarget(targets, o);
   const cdp = await (dependencies.connect || connect)(target.webSocketDebuggerUrl, o.timeout);
   let measuring = false;
   try {
     await cdp.send('Runtime.enable');
     await install(cdp, await readFile(new URL('./ykt-5x.js', import.meta.url), 'utf8'));
+    if (o.action === 'videos') {
+      const result = await evaluate(cdp, 'window.video5x.videos()');
+      return { ok: result?.ok === true, result };
+    }
     const deadline = Date.now() + o.timeout;
     let ready;
     do {
-      ready = await evaluate(cdp, 'window.ykt5x.state()');
+      if (o.action === 'restore') break;
+      ready = await evaluate(cdp, o.action !== 'apply' ? 'window.video5x.state()'
+        : `(()=>{const videos=window.video5x.videos().videos;return {ok:videos.some(v=>v.ready&&${o.video === undefined ? '(v.selected||videos.length===1)' : `v.index===${o.video}`})};})()`);
       if (ready?.ok) break;
       await new Promise(resolve => setTimeout(resolve, 50));
     } while (Date.now() < deadline);
     // Restore must remain possible when the old player has already been detached.
     if (!ready?.ok && o.action !== 'restore') throw new Error('Player readiness timeout');
-    const result = o.action === 'apply' ? await evaluate(cdp, `window.ykt5x.apply(${o.factor})`)
-      : o.action === 'restore' ? await evaluate(cdp, 'window.ykt5x.restore()') : ready;
+    const result = o.action === 'apply' ? await evaluate(cdp, `window.video5x.apply(${o.factor},${o.video ?? 'undefined'})`)
+      : o.action === 'restore' ? await evaluate(cdp, 'window.video5x.restore()') : ready;
     const out = { ok: result?.ok === true, result };
     if (out.ok && o.measure !== undefined) {
       measuring = true;
-      out.measure = await evaluate(cdp, `window.ykt5x.measure(${o.measure * 1000})`, o.measure * 1000 + o.timeout);
+      out.measure = await evaluate(cdp, `window.video5x.measure(${o.measure * 1000})`, o.measure * 1000 + o.timeout);
       measuring = false;
       out.ok = out.measure?.ok === true;
     }
     return out;
   } finally {
     if (measuring) {
-      try { await evaluate(cdp, 'window.ykt5x?.cancelMeasure()', 500); } catch { /* context gone; page timers are bounded */ }
+      try { await evaluate(cdp, 'window.video5x?.cancelMeasure()', 500); } catch { /* context gone; page timers are bounded */ }
     }
     cdp.close();
   }
@@ -150,7 +157,7 @@ export async function run(o, dependencies = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const o = parseArgs(process.argv.slice(2));
-    const out = o.action === 'help' ? { ok: true, usage: 'node agent-5x.mjs --list|--state|--apply=5|--restore [--target=<id>] [--measure=60] [--timeout=10000] [--cdp=http://127.0.0.1:9222]' } : await run(o);
+    const out = o.action === 'help' ? { ok: true, usage: 'node agent-5x.mjs --list|--videos|--state|--apply=5|--restore [--target=<id>] [--video=<index>] [--measure=60] [--timeout=10000] [--cdp=http://127.0.0.1:9222]' } : await run(o);
     console.log(JSON.stringify(out, null, 2));
     if (!out.ok) process.exitCode = 1;
   } catch (e) {
@@ -158,3 +165,4 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = 1;
   }
 }
+
