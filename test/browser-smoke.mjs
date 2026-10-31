@@ -81,6 +81,39 @@ try {
   const generic = await evaluate(cdp, `(async()=>{await new Promise(r=>setTimeout(r,600));const v=document.querySelector('#v');const result={rate:v.playbackRate,paused:v.paused,keeping:video5x.state().keeping};video5x.dispose();return result;})()`);
   assert.deepEqual(generic, { rate: 1.25, paused: true, keeping: false });
 
+  // Native media keeps running while another real headless-browser tab is active.
+  assert.equal((await evaluate(cdp, source)).ok, true);
+  await evaluate(cdp, `(async()=>{video5x.apply(5,document.querySelector('#v'));video5x.background.enable();await document.querySelector('#v').play();return true;})()`);
+  const other = await cdp.send('Target.createTarget', { url: 'about:blank' });
+  await cdp.send('Target.activateTarget', { targetId: other.targetId });
+  const background = await evaluate(cdp, `(async()=>{const v=document.querySelector('#v');const hidden=document.hidden;const t=v.currentTime;const start=performance.now();await new Promise(r=>setTimeout(r,1200));return {hidden,advance:v.currentTime-t,elapsed:(performance.now()-start)/1000,state:video5x.background.state()};})()`);
+  assert.ok(background.advance > 4, JSON.stringify(background));
+  assert.equal(background.state.real, 5); assert.equal(background.state.paused, false);
+  await cdp.send('Target.closeTarget', { targetId: other.targetId });
+  await cdp.send('Target.activateTarget', { targetId: target.id });
+
+  // Fixture completion metadata changes only on a real native ended event.
+  const autonext = await evaluate(cdp, `(async()=>{
+    video5x.restore();
+    let active='one',completed=false,clicks=0;
+    const button=document.createElement('button');button.textContent='第二个测试视频';document.body.append(button);
+    button.onclick=()=>{clicks++;active='two';const old=document.querySelector('#v');old.remove();const v=document.createElement('video');v.id='v';v.muted=true;v.preload='auto';v.src='/tone.wav';document.body.append(v);};
+    const first=document.querySelector('#v');first.addEventListener('ended',()=>{completed=true;},{once:true});
+    video5x.catalogue.register(()=>({ok:true,platform:'local-fixture',courseKey:'fixture-course',items:[
+      {id:'one',title:'第一集',kind:'video',status:completed?'completed':'in_progress',active:active==='one',element:button},
+      {id:'done',title:'已看',kind:'video',status:'completed',active:false,element:button},
+      {id:'two',title:'未看',kind:'video',status:'not_started',active:active==='two',element:button}
+    ]}));
+    const started=video5x.autonext.enable();if(!started.enabled)throw Error(JSON.stringify(started));
+    first.pause();await new Promise(resolve=>{first.addEventListener('seeked',resolve,{once:true});first.currentTime=first.duration-.8;});await first.play();
+    const deadline=performance.now()+7500;
+    while(performance.now()<deadline){const s=video5x.autonext.state();if(s.currentId==='two'&&s.phase==='watching')break;if(s.reason)throw Error(s.reason);await new Promise(r=>setTimeout(r,50));}
+    const state=video5x.autonext.state(),v=document.querySelector('#v');const out={clicks,completed,state,real:v.playbackRate,paused:v.paused,firstTime:first.currentTime,firstEnded:first.ended,duration:first.duration,background:video5x.background.state()};
+    video5x.stop();v.pause();video5x.dispose();button.remove();return out;
+  })()`, 10000);
+  assert.equal(autonext.clicks, 1, JSON.stringify(autonext)); assert.equal(autonext.completed, true);
+  assert.equal(autonext.state.currentId, 'two'); assert.equal(autonext.real, 5); assert.equal(autonext.paused, false);
+
   // Local simulated Yuketang menu, with real native media setters and Vue-style accessors.
   await evaluate(cdp, `(()=>{
     document.body.innerHTML='<div class="xtplayer"><video></video><xt-speedbutton><li data-speed="2">2X</li><li data-speed="1.25" class="xt_video_player_common_active">1.25X</li></xt-speedbutton><xt-speedvalue>1.25X</xt-speedvalue></div>';
@@ -97,7 +130,7 @@ try {
   assert.equal((await evaluate(cdp, yktInstall)).ok, true);
   const yuketang = await evaluate(cdp, `(()=>{const a=video5x.apply(5),b=video5x.apply(4),r=video5x.restore();const {host,v,p}=smoke;const out={ok:a.ok&&b.ok&&r.ok,mode:a.mode,native:v.playbackRate,selected:smoke.selected,isDrag:p.options.isDrag,paused:v.paused,menuRestored:host.innerHTML===smoke.before};video5x.dispose();return out;})()`);
   assert.deepEqual(yuketang, { ok: true, mode: 'yuketang', native: 1.25, selected: 1.25, isDrag: false, paused: true, menuRestored: true });
-  console.log(JSON.stringify({ browserSmoke: 'PASS', generic, actualMedia: measured.measure, yuketang }));
+  console.log(JSON.stringify({ browserSmoke: 'PASS', generic, actualMedia: measured.measure, background, autonext, yuketang }));
 } finally {
   if (cdp) { try { await cdp.send('Browser.close', {}, 1000); } catch { /* browser closing */ } cdp.close(); }
   if (browser && browser.exitCode === null) {

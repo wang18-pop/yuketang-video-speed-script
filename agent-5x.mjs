@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-export const VERSION = '4.0.0';
+export const VERSION = '4.1.0';
 const range = (x, low, high) => Number.isFinite(x) && x >= low && x <= high;
 export function validPage(value) {
   try {
@@ -24,7 +24,10 @@ export function parseArgs(args) {
     const m = /^--([a-z]+)(?:=(.*))?$/.exec(arg);
     if (!m) throw new Error('Invalid argument');
     const [, key, value] = m;
-    if (['state', 'restore', 'list', 'videos', 'help', 'apply'].includes(key)) {
+    if (['background', 'autonext'].includes(key)) {
+      if (++actions > 1 || !['on', 'off', 'state'].includes(value ?? 'state')) throw new Error('Automation: on|off|state');
+      o.action = key; o.operation = value ?? 'state';
+    } else if (['state', 'restore', 'list', 'videos', 'catalogue', 'stop', 'help', 'apply'].includes(key)) {
       if (++actions > 1 || (key !== 'apply' && value !== undefined)) throw new Error('Choose one action');
       o.action = key;
       if (key === 'apply') o.factor = value === undefined ? 5 : Number(value);
@@ -105,7 +108,7 @@ export async function evaluate(cdp, expression, ms) {
 }
 export async function install(cdp, source) {
   const result = await evaluate(cdp, source); // Execute source itself, never JSON.stringify(source).
-  const api = await evaluate(cdp, `({version:window.video5x?.version,ready:['apply','restore','state','measure','cancelMeasure','videos'].every(k=>typeof window.video5x?.[k]==='function')})`);
+  const api = await evaluate(cdp, `({version:window.video5x?.version,ready:['apply','restore','state','measure','cancelMeasure','videos','stop'].every(k=>typeof window.video5x?.[k]==='function')&&['background','autonext'].every(k=>['enable','disable','state'].every(m=>typeof window.video5x?.[k]?.[m]==='function'))&&typeof window.video5x?.catalogue?.scan==='function'})`);
   if (result?.ok !== true || result.version !== VERSION || api?.version !== VERSION || !api.ready)
     throw new Error('Controller installation failed');
 }
@@ -122,6 +125,14 @@ export async function run(o, dependencies = {}) {
   try {
     await cdp.send('Runtime.enable');
     await install(cdp, await readFile(new URL('./ykt-5x.js', import.meta.url), 'utf8'));
+    if (['background', 'autonext', 'catalogue', 'stop'].includes(o.action)) {
+      const expression = o.action === 'catalogue'
+        ? '(()=>{const r=window.video5x.catalogue.scan();return {...r,items:r.items?.map(({element,...item})=>item)};})()'
+        : o.action === 'stop' ? 'window.video5x.stop()'
+        : `window.video5x.${o.action}.${{ on: 'enable', off: 'disable', state: 'state' }[o.operation]}()`;
+      const result = await evaluate(cdp, expression);
+      return { ok: result?.ok === true, result };
+    }
     if (o.action === 'videos') {
       const result = await evaluate(cdp, 'window.video5x.videos()');
       return { ok: result?.ok === true, result };
@@ -157,7 +168,7 @@ export async function run(o, dependencies = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const o = parseArgs(process.argv.slice(2));
-    const out = o.action === 'help' ? { ok: true, usage: 'node agent-5x.mjs --list|--videos|--state|--apply=5|--restore [--target=<id>] [--video=<index>] [--measure=60] [--timeout=10000] [--cdp=http://127.0.0.1:9222]' } : await run(o);
+    const out = o.action === 'help' ? { ok: true, usage: 'node agent-5x.mjs --list|--videos|--state|--apply=5|--restore|--catalogue|--background=on|off|state|--autonext=on|off|state|--stop [--target=<id>] [--video=<index>] [--measure=60] [--timeout=10000] [--cdp=http://127.0.0.1:9222]' } : await run(o);
     console.log(JSON.stringify(out, null, 2));
     if (!out.ok) process.exitCode = 1;
   } catch (e) {

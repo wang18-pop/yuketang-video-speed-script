@@ -185,6 +185,40 @@ test('generic CLI enumerates videos before explicit multi-video selection and cl
   f.api.dispose();
 });
 
+test('automation CLI actions preserve API compatibility and stop without future work', async () => {
+  const f = generic(); let closed = 0;
+  f.api.catalogue.register(() => ({ platform: 'fixture', courseKey: 'course', items: [{ id: 'one', title: 'video', kind: 'video',
+    status: 'in_progress', active: true, element: { isConnected: true, click() {} } }] }));
+  const deps = { fetch: async () => ({ ok: true, json: async () => [{ ...target, url: f.location.href }] }),
+    connect: async () => ({ close() { closed++; }, send: async (method, p) => method !== 'Runtime.evaluate' ? {}
+      : { result: { value: await vm.runInContext(p.expression, f.sandbox) } } }) };
+  const invoke = args => run(parseArgs(args), deps);
+  assert.equal((await invoke(['--apply'])).ok, true);
+  assert.equal((await invoke(['--background=on'])).result.enabled, true);
+  assert.equal((await invoke(['--background=state'])).result.enabled, true);
+  assert.equal((await invoke(['--background=off'])).result.enabled, false);
+  assert.equal((await invoke(['--catalogue'])).result.items[0].element, undefined);
+  assert.equal((await invoke(['--autonext=on'])).result.enabled, true);
+  assert.equal((await invoke(['--autonext=state'])).result.currentId, 'one');
+  assert.equal((await invoke(['--stop'])).ok, true);
+  assert.equal(f.api.autonext.state().enabled, false); assert.equal(f.api.state().keeping, false);
+  assert.equal((await invoke(['--restore'])).ok, true);
+  assert.equal(closed, 9);
+  for (const args of [['--background=invalid'], ['--autonext='], ['--autonext=on', '--apply'], ['--stop=on']])
+    assert.throws(() => parseArgs(args));
+  f.api.dispose();
+});
+
+test('pagehide cancels automation and removes its own lifecycle listener', () => {
+  const f = generic(); f.window.location = f.location; f.document.defaultView = f.window;
+  assert.equal(f.api.apply().ok, true); f.api.background.enable();
+  assert.equal(getEventListeners(f.window, 'pagehide').length, 1);
+  f.window.dispatchEvent(new Event('pagehide'));
+  assert.equal(f.api.background.state().enabled, false); assert.equal(f.api.state().keeping, false);
+  assert.equal(getEventListeners(f.window, 'pagehide').length, 0);
+  assert.equal(f.api.restore().real, 1.25); f.api.dispose();
+});
+
 test('a setter that silently ignores isDrag cannot report successful apply', () => {
   const f = fixture(source);
   Object.defineProperty(f.player.p.options, 'isDrag', { get: () => false, set() {} });

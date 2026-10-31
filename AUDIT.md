@@ -1,41 +1,41 @@
-# Agent 接口与审查记录
+# v4.1.0 审查与验证
 
-版本：4.0.0。日期：2026-10-29。只面向电脑网页，不新增运行依赖。
+日期：2026-10-31。独立分支 `codex/background-autonext`，不直接推送 main。
 
-## Agent 执行顺序
+## 增量实现
 
-1. 读取 `ykt-5x.js`，在用户指定视频所在的页面上下文执行源码本体。不要把源码 JSON 字符串当作脚本执行。安装本身不会应用倍速。
-2. 调用 `window.video5x.videos()` 列出视频，再调用 `window.video5x.apply(5, index)`。多个视频时必须明确选择；第二参数也可直接传当前视频元素。无第二参数时沿用已选视频，或选择唯一视频。
-3. 读取 `window.video5x.state()`，核对 `ok`、`real`、`target`、`keeping`。不要仅凭网站倍速标签宣布成功。雨课堂适配另检查内部选中值 `sp` 和 `isDrag`。
-4. 用户正在播放时可调用 `await window.video5x.measure(3000)` 验证实际媒体推进速度。发生跳转、中断或拖动时不要使用无效倍率；`cancelMeasure()` 可取消。
-5. `restore()` 停止保速并恢复原倍速；`dispose()` 进一步删除面板与全局 API。恢复失败返回 `retryable` 并保留备份，修复原因后重试。旧名称 `window.ykt5x` 保留为同一个 API 的别名，文件名保留以兼容原仓库链接。
+- 复用原保速与恢复逻辑；新增事件驱动后台续播，有限重试并保守处理用户暂停、缓冲与未知原因。
+- 增加五平台候选目录扫描、结构化完成状态、会话去重与单次原生目录导航；自然 ended 与平台明确完成必须同时成立。
+- 加入 API、CLI 与一个中文面板。整页跳转不假装保留旧注入，重新安装后默认关闭自动化。
+- 无新增运行依赖。原有 31 项测试全部保留。
 
-仅显式 apply 后每 500 ms 检查一次已选视频的倍率，网站重置时重新设置。视频、来源、路由或播放器发生变化时停止保速，Agent 应重新检查和明确应用；不会自动选择下一个视频。保速失败会停止并报告错误。脚本不自动播放、不跳转时间、不修改学习记录。
+## 独立对抗审查
 
-## CLI
+实际复现并修复三项：恢复时同步停止仍点击目录；nextVideo.play() 永不兑现使连播挂起；停止/解绑/卸载后的迟到后台 play() 仍启动旧视频。分别增加取消 token 检查、10 秒启动期限及可取消等待、旧请求视频的迟到暂停保护；补充回归。重放视频的 ended 监听可重新武装，重复 ended 不产生多次导航。
 
-CLI 读取同一份控制器，使用 Node.js >=22.4 的内置模块。浏览器须已由用户或其 Agent 配置本机 CDP。脚本不启动浏览器或登录。先用 `node agent-5x.mjs --list` 查找页面，再用 `--target=<id>` 锁定用户指定标签页。
+完成更新最多等 15 秒，导航/新媒体最多等 20 秒，自动播放启动最多等 10 秒；每个候选只点击一次。扫描每次重取 DOM，课程改变、资源重复或未知状态停止；未知类型不当视频处理。
 
-- `node agent-5x.mjs --videos --target=<id>`：列出视频索引。
-- `node agent-5x.mjs --apply=5 --target=<id> --video=0`：应用并保速。
-- `node agent-5x.mjs --state --target=<id>`：读回状态。
-- `node agent-5x.mjs --restore --target=<id>`：恢复。
+## 实际执行
 
-目标必须为 HTTP(S) 的唯一 page，CDP 及 WebSocket 必须位于 loopback。禁止回退到不明确的首个标签页。非法参数、失败操作、超时或断连以非零退出码结束。
+```text
+npm run check: exit 0
+npm test: 59 passed, 0 failed
+npm run test:browser: browserSmoke=PASS
+```
 
-## 支持边界
+真实 Chrome 使用独立临时配置、回环 HTTP、标准 video 解码本地生成的 WAV 媒体，无真实课程账号。一次通过的结果：前台 real=5，overallRate=5.010374；真实切换到其他标签页后 document.hidden=true，1.2013 秒媒体推进 4.38424 秒（含一次后台相关暂停续播），末次稳定采样 observedHidden=true、effectiveRate=4.987229。没有把切后台时的暂停段算成始终五倍速。
 
-标准 HTML5 视频使用原生 playbackRate；雨课堂可识别的 xtplayer 保留已有菜单与 Vue 响应式配置适配。可发现同源 iframe 及开放 Shadow DOM 中的视频，并对所选视频保速。多个视频不会一并加速；尚无视频或媒体未就绪会返回失败。
+同一浏览器内验证第一段媒体原生自然 ended=true，测试目录元数据随后显示 completed，只产生一次目录点击，新媒体完成加载后 real=5、paused=false、currentId=two。测试中的完成元数据和目录由本地夹具提供；为缩短测试对夹具媒体进行过 seek，没有修改任何网站记录。
 
-跨域或 sandbox 隔离的 iframe 会计入 blockedFrames，需要 Agent 在目标 frame 内另行执行。封闭 Shadow DOM、非标准或拒绝倍速的播放器需要按网站适配；直播即使属性接受 5 也不保证实际加速。浏览器可能限制可用倍率或五倍速声音。本轮只验证本机 Chrome，没有逐网站或其他浏览器验收。
+雨课堂适配回归：native=1.25、selected=1.25、isDrag=false、paused=true、menuRestored=true。以上不是五个平台真实课程的兼容证明，也没有验证电脑最小化、操作系统休眠、所有浏览器或全部页面版本。
 
-## 实际验证
+## 来源与工程边界
 
-实际执行结果：`npm run check` exit 0；`npm test` 31 passed、0 failed；`npm run test:browser` exit 0、browserSmoke=PASS。测试覆盖非法输入、空/未就绪视频、多视频选择、原倍速恢复、媒体错误、站点重设、保速失败、来源/路由替换、取消与并发测量、回滚失败重试、过期绑定重新应用、CDP 超时/断连及非零退出。
+实际阅读参考 A [Breeze1733/yuketang-auto-player 源码](https://github.com/Breeze1733/yuketang-auto-player/blob/HEAD/yuketang.user.js) 的 observePause/keepAlive；参考 B、C 及五平台目录事实见 [ADAPTERS.md](ADAPTERS.md)。阅读参考 D [hajimixiaojie/yuketang-auto-reader/course-helper.js](https://github.com/hajimixiaojie/yuketang-auto-reader/blob/HEAD/course-helper.js) 的 findVideoFrame、startVideo、getVideoState 与播放监控；只借鉴检查实际播放与期限的设计，没有沿用无限继续、结束近似或直接完成上报。所有新增代码独立编写，未复制参考项目实现。
 
-独立审查复现并修复：HTML5 转雨课堂时两份备份冲突；媒体 error/未就绪时错误丢弃备份；CLI 以旧绑定状态阻止重新 apply。三项均补充回归，独立复核已关闭。
+本机 Git 代理失效，绕过失效代理的一次 clone 也被连接重置。保留原工作区，在独立目录基于已核验的 v4.0.0 文件创建本地基线提交和开发分支；若发布远程开发分支，则通过 GitHub tree/commit/ref 接口以实际 main 提交为父提交，避免覆盖 main 或上传其他个人文件。
 
-真实 Chrome 使用独立临时配置和仅本机 HTTP 夹具。通用测试由原生 video 元素解码本地生成的 WAV 媒体：最终运行 1.2009 秒推进 5.928405 秒，overallRate=4.936635（此前一次为 5.000087）；无 seek、暂停或缓冲。另验证多视频、同源 iframe、开放 Shadow DOM、隔离 frame 报告、网站重设后的保速、恢复到 1.25 倍及保持暂停。雨课堂菜单与 Vue getter/setter 使用本地模拟夹具，最终 native=1.25、selected=1.25、isDrag=false、menuRestored=true。
+## 未覆盖与受限情况
 
-此证据证明本地核心及真实 Chromium 媒体链路通过，不是本轮真实雨课堂或全部网站的兼容证明。
+学习通和云班课缺单资源完成元数据时不能可靠自动连播；其他平台未知页面版本同样停止，需要 Agent 明确适配。全页跳转重新注入和启用是显式要求，不提供跨页自动登录或无限重载。网站策略导致无法后台播放时，如实报告 paused/error/进度不推进，不伪造支持。
 

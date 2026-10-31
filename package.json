@@ -1,13 +1,14 @@
 {
   "name": "yuketang-video-speed-script",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.4" },
+  "engines": {
+    "node": ">=22.4"
+  },
   "scripts": {
-    "check": "node --check agent-5x.mjs && node --check ykt-5x.js && node --check test/fixture.mjs && node --check test/tool.test.mjs && node --check test/browser-smoke.mjs",
-    "test": "node --test test/tool.test.mjs",
+    "check": "node --check agent-5x.mjs && node --check ykt-5x.js && node --check test/fixture.mjs && node --check test/tool.test.mjs && node --check test/browser-smoke.mjs && node --check test/background.test.mjs && node --check test/catalogue.test.mjs && node --check test/autonext.test.mjs",
+    "test": "node --test test/tool.test.mjs test/background.test.mjs test/catalogue.test.mjs test/autonext.test.mjs",
     "test:browser": "node test/browser-smoke.mjs"
   }
 }
-
